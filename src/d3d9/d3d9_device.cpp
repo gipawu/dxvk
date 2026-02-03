@@ -1754,7 +1754,7 @@ namespace dxvk {
 
     if (texInfo != nullptr) {
       // Update render target sampling usage bitmask for hazard tracking
-      m_rtSlotTracking.canBeSampled |= uint8_t(HasRenderTargetBound(RenderTargetIndex) &&
+      m_rtSlotTracking.canBeSampled |= uint8_t(!texInfo->IsNull() &&
         rt->GetBaseTexture() != nullptr) << RenderTargetIndex;
 
       // Update render target alpha swizzle bitmask if we need to fix up the alpha channel
@@ -6397,18 +6397,6 @@ namespace dxvk {
   }
 
 
-  inline void D3D9DeviceEx::UpdateActiveRTs(uint32_t index) {
-    const uint32_t bit = 1 << index;
-
-    m_rtSlotTracking.canBeSampled &= ~bit;
-
-    if (HasRenderTargetBound(index) &&
-      m_state.renderTargets[index]->GetBaseTexture() != nullptr)
-      m_rtSlotTracking.canBeSampled |= bit;
-
-    UpdateActiveHazardsRT(std::numeric_limits<uint32_t>::max());
-  }
-
   template <uint32_t Index>
   inline void D3D9DeviceEx::UpdateAnyColorWrites() {
     // Writes to a render target have been enabled => check for hazards
@@ -6645,10 +6633,23 @@ namespace dxvk {
     });
 
     for (uint32_t samplerIdx : bit::BitMask(m_textureSlotTracking.unresolvableHazardRT | m_textureSlotTracking.unresolvableHazardDS)) {
-      // Guaranteed to not be nullptr...
       auto tex = GetCommonTexture(m_state.textures[samplerIdx]);
+
       if (unlikely(!tex->MarkTransitionedToHazardLayout())) {
-        TransitionImage(tex, m_hazardLayout);
+        // Recreate image with feedback loop usage and layout
+        EmitCs([
+          cImage  = tex->GetImage(),
+          cLayout = m_hazardLayout
+        ] (DxvkContext* ctx) mutable {
+          DxvkImageUsageInfo usage = { };
+          usage.layout = cLayout;
+
+          if (cLayout == VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT)
+            usage.usage = VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
+
+          ctx->ensureImageCompatibility(std::move(cImage), usage);
+        });
+
         m_dirty.set(D3D9DeviceDirtyFlag::Framebuffer);
       }
     }
@@ -8662,17 +8663,6 @@ namespace dxvk {
   }
 
 
-  void D3D9DeviceEx::TransitionImage(D3D9CommonTexture* pResource, VkImageLayout NewLayout) {
-    EmitCs([
-      cImage        = pResource->GetImage(),
-      cNewLayout    = NewLayout
-    ] (DxvkContext* ctx) {
-      ctx->changeImageLayout(
-        cImage, cNewLayout);
-    });
-  }
-
-
   void D3D9DeviceEx::TransformImage(
           D3D9CommonTexture*       pResource,
     const VkImageSubresourceRange* pSubresources,
@@ -8874,6 +8864,10 @@ namespace dxvk {
       stage[DXVK_TSS_RESULTARG]             = D3DTA_CURRENT;
       stage[DXVK_TSS_CONSTANT]              = 0x00000000;
     }
+
+    // Projected is set based on DXVK_TSS_TEXTURETRANSFORMFLAGS
+    m_textureSlotTracking.projected = 0;
+
     m_dirty.set(D3D9DeviceDirtyFlag::SharedPixelShaderData);
     m_dirty.set(D3D9DeviceDirtyFlag::FFPixelShader);
 

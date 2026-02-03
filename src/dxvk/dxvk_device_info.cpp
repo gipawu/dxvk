@@ -54,9 +54,11 @@ namespace dxvk {
     HANDLE_EXT(khrPresentWait);                    \
     HANDLE_EXT(khrPresentWait2);                   \
     HANDLE_EXT(khrShaderFloatControls2);           \
+    HANDLE_EXT(khrShaderSubgroupUniformControlFlow);\
     HANDLE_EXT(khrSwapchain);                      \
     HANDLE_EXT(khrSwapchainMaintenance1);          \
     HANDLE_EXT(khrSwapchainMutableFormat);         \
+    HANDLE_EXT(khrUnifiedImageLayouts);            \
     HANDLE_EXT(khrWin32KeyedMutex);                \
     HANDLE_EXT(nvLowLatency2);                     \
     HANDLE_EXT(nvRawAccessChains);                 \
@@ -474,6 +476,10 @@ namespace dxvk {
       if (!enableDescriptorBuffer)
         m_featuresSupported.extDescriptorBuffer.descriptorBuffer = VK_FALSE;
     }
+
+    // Disable unified layouts if disabled via config
+    if (!instance.options().enableUnifiedImageLayout)
+      m_featuresSupported.khrUnifiedImageLayouts.unifiedImageLayouts = VK_FALSE;
 
     if (env::is32BitHostPlatform()) {
       // CUDA interop is unnecessary on 32-bit, no games use it
@@ -939,6 +945,9 @@ namespace dxvk {
       /* Used for shader compilation in addition to regular float_controls features */
       ENABLE_EXT_FEATURE(khrShaderFloatControls2, shaderFloatControls2, false),
 
+      /* Subgroup uniform control flow for some built-in shaders */
+      ENABLE_EXT_FEATURE(khrShaderSubgroupUniformControlFlow, shaderSubgroupUniformControlFlow, false),
+
       /* Swapchain, needed for presentation */
       ENABLE_EXT(khrSwapchain, true),
 
@@ -948,6 +957,9 @@ namespace dxvk {
 
       /* Mutable format used to change srgb-ness of swapchain views */
       ENABLE_EXT(khrSwapchainMutableFormat, false),
+
+      /* Use GENERAL layout for everything */
+      ENABLE_EXT_FEATURE(khrUnifiedImageLayouts, unifiedImageLayouts, false),
 
       /* Keyed mutex support in wine */
       ENABLE_EXT(khrWin32KeyedMutex, false),
