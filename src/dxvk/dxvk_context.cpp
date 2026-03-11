@@ -8104,10 +8104,9 @@ namespace dxvk {
       VkImageSubresourceRange subresources = image->getAvailableSubresources();
   
       if (findOverlappingDeferredClear(*image, image->getAvailableSubresources()))
-        this->spillRenderPass(false);
+        this->endCurrentPass(false);
   
-      transitionImageLayout(DxvkCmdBuffer::ExecBuffer,
-        *image, subresources,
+      transitionImageLayout(*image, subresources,
         image->info().stages, image->info().access,
         image->info().layout,
         image->info().stages, image->info().access, false);
