@@ -65,6 +65,8 @@ namespace dxvk {
     , m_d3d9On12           ( this )
     , m_d3d8Bridge         ( this ) {
 
+    InitShaderOptions();
+
     // If we can SWVP, then we use an extended constant set
     // as SWVP has many more slots available than HWVP.
     bool canSWVP = CanSWVP();
@@ -94,8 +96,6 @@ namespace dxvk {
     if (!(BehaviorFlags & D3DCREATE_FPU_PRESERVE))
       SetupFPU();
 
-    m_dxsoOptions = DxsoOptions(this, m_d3d9Options);
-
     // Check if VK_EXT_robustness2 is supported, so we can optimize the number of constants we need to copy.
     // Also check the required alignments.
     const bool supportsRobustness2 = m_dxvkDevice->features().extRobustness2.robustBufferAccess2;
@@ -106,7 +106,10 @@ namespace dxvk {
       m_robustSSBOAlignment = m_dxvkDevice->properties().extRobustness2.robustStorageBufferAccessSizeAlignment;
       m_robustUBOAlignment  = m_dxvkDevice->properties().extRobustness2.robustUniformBufferAccessSizeAlignment;
       if (canSWVP) {
-        const uint32_t floatBufferAlignment = m_dxsoOptions.vertexFloatConstantBufferAsSSBO ? m_robustSSBOAlignment : m_robustUBOAlignment;
+        const uint32_t floatBufferAlignment =
+          vsConstSet.layout.totalSize() < m_dxvkShaderOptions.maxUniformBufferSize
+          ? m_robustSSBOAlignment
+          : m_robustUBOAlignment;
 
         useRobustConstantAccess &= vsConstSet.layout.floatSize() % floatBufferAlignment == 0;
         useRobustConstantAccess &= vsConstSet.layout.intSize() % m_robustUBOAlignment == 0;
@@ -1835,7 +1838,7 @@ namespace dxvk {
 
     // Update depth bias if necessary
     if (ds != nullptr && m_depthBiasRepresentation.depthBiasRepresentation != VK_DEPTH_BIAS_REPRESENTATION_FLOAT_EXT) {
-      const int32_t vendorId = m_dxvkDevice->adapter()->deviceProperties().core.properties.vendorID;
+      const int32_t vendorId = m_dxvkDevice->properties().core.properties.vendorID;
       const bool exact = m_depthBiasRepresentation.depthBiasExact;
       const bool forceUnorm = m_depthBiasRepresentation.depthBiasRepresentation == VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORCE_UNORM_EXT;
       const float rValue = GetDepthBufferRValue(ds->GetCommonTexture()->GetFormatMapping().FormatColor, vendorId, exact, forceUnorm);
@@ -3357,6 +3360,7 @@ namespace dxvk {
       cBufferSlice    = dst->GetBufferSlice<D3D9_COMMON_BUFFER_TYPE_REAL>(),
       cBufferOffset   = offset
     ](DxvkContext* ctx) mutable {
+      // Create a pass-through geometry shader for vertex shader stream output
       Rc<DxvkShader> shader = m_swvpEmulator.GetShaderModule(this, std::move(cVertexElements));
 
       auto drawInfo = GenerateDrawInfo(D3DPT_POINTLIST, cVertexCount, cInstanceCount);
@@ -3555,24 +3559,20 @@ namespace dxvk {
     if (unlikely(ppShader == nullptr))
       return D3DERR_INVALIDCALL;
 
-    DxsoModuleInfo moduleInfo;
-    moduleInfo.options = m_dxsoOptions;
-
     D3D9CommonShader module;
-    uint32_t bytecodeLength;
+    size_t bytecodeLength;
 
     if (FAILED(this->CreateShaderModule(&module,
       &bytecodeLength,
       VK_SHADER_STAGE_VERTEX_BIT,
-      pFunction,
-      &moduleInfo)))
+      pFunction)))
       return D3DERR_INVALIDCALL;
 
     *ppShader = ref(new D3D9VertexShader(this,
       &m_shaderAllocator,
       module,
       pFunction,
-      bytecodeLength));
+      uint32_t(bytecodeLength)));
 
     return D3D_OK;
   }
@@ -3914,24 +3914,20 @@ namespace dxvk {
     if (unlikely(ppShader == nullptr))
       return D3DERR_INVALIDCALL;
 
-    DxsoModuleInfo moduleInfo;
-    moduleInfo.options = m_dxsoOptions;
-
     D3D9CommonShader module;
-    uint32_t bytecodeLength;
+    size_t bytecodeLength;
 
     if (FAILED(this->CreateShaderModule(&module,
       &bytecodeLength,
       VK_SHADER_STAGE_FRAGMENT_BIT,
-      pFunction,
-      &moduleInfo)))
+      pFunction)))
       return D3DERR_INVALIDCALL;
 
     *ppShader = ref(new D3D9PixelShader(this,
       &m_shaderAllocator,
       module,
       pFunction,
-      bytecodeLength));
+      uint32_t(bytecodeLength)));
 
     return D3D_OK;
   }
@@ -4671,11 +4667,18 @@ namespace dxvk {
         m_dirty.set(D3D9DeviceDirtyFlag::FFPixelShader);
     }
 
+    // We pick a different address mode for cubemaps, so we might need to update the sampler state.
     bool oldTextureIsCube = oldTexture != nullptr && oldTexture->IsCube();
     bool newTextureIsCube = newTexture != nullptr && newTexture->IsCube();
-    if (unlikely(oldTextureIsCube != newTextureIsCube)) {
+    if (unlikely(oldTextureIsCube != newTextureIsCube))
       m_textureSlotTracking.samplerStateDirty |= 1u << StateSampler;
-    }
+
+    // We disable anisotropic filtering if the texture only has a single mip map,
+    // so wie might need to update the sampler state.
+    bool oldTextureHasMultipleMips = oldTexture != nullptr && oldTexture->Desc()->MipLevels > 1u;
+    bool newTextureHasMultipleMips = newTexture != nullptr && newTexture->Desc()->MipLevels > 1u;
+    if (unlikely(oldTextureHasMultipleMips != newTextureHasMultipleMips))
+      m_textureSlotTracking.samplerStateDirty |= 1u << StateSampler;
 
     DWORD oldUsage = oldTexture != nullptr ? oldTexture->Desc()->Usage : 0;
     DWORD newUsage = newTexture != nullptr ? newTexture->Desc()->Usage : 0;
@@ -4686,10 +4689,9 @@ namespace dxvk {
 
     // If the texture format changes and the corresponding sampler uses
     // border colors, we may need to update the border color swizzle
-    if (!oldTexture || !newTexture || oldTexture->Desc()->Format != newTexture->Desc()->Format) {
-      if (SamplerUsesBorderColor(StateSampler))
+    if ((!oldTexture || !newTexture || oldTexture->Desc()->Format != newTexture->Desc()->Format)
+      && SamplerUsesBorderColor(StateSampler))
         m_textureSlotTracking.samplerStateDirty |= 1u << StateSampler;
-    }
 
     return D3D_OK;
   }
@@ -5991,12 +5993,11 @@ namespace dxvk {
 
 
   int64_t D3D9DeviceEx::DetermineInitialTextureMemory() {
-    auto memoryProp = m_adapter->GetDXVKAdapter()->memoryProperties();
+    auto adapterInfo = m_dxvkDevice->adapter()->info();
 
-    VkDeviceSize availableTextureMemory = 0;
-
-    for (uint32_t i = 0; i < memoryProp.memoryHeapCount; i++)
-      availableTextureMemory += memoryProp.memoryHeaps[i].size;
+    // Apparently we need to return video and system memory combined:
+    // https://github.com/doitsujin/dxvk/pull/1436
+    VkDeviceSize availableTextureMemory = adapterInfo.deviceMemory + adapterInfo.systemMemory;
 
     constexpr VkDeviceSize Megabytes = 1024 * 1024;
     // Windows will typically "reserve" some amount of video memory,
@@ -8100,22 +8101,170 @@ namespace dxvk {
   }
 
 
-  HRESULT D3D9DeviceEx::CreateShaderModule(
-        D3D9CommonShader*     pShaderModule,
-        uint32_t*             pLength,
-        VkShaderStageFlagBits ShaderStage,
-  const DWORD*                pShaderBytecode,
-  const DxsoModuleInfo*       pModuleInfo) {
-    try {
-      m_shaderModules->GetShaderModule(this, pShaderModule,
-        pLength, ShaderStage, pModuleInfo, pShaderBytecode);
+  void D3D9DeviceEx::InitShaderOptions() {
+    m_dxvkShaderOptions = m_dxvkDevice->getShaderCompileOptions();
 
-      return D3D_OK;
-    }
-    catch (const DxvkError& e) {
-      Logger::err(e.message());
+    if (m_d3d9Options.forceSampleRateShading)
+      m_dxvkShaderOptions.flags.set(DxvkShaderCompileFlag::EnableSampleRateShading);
+
+    m_shaderOptions.d3d9FloatEmulation = m_d3d9Options.d3d9FloatEmulation;
+    m_shaderOptions.isSWVP = CanSWVP();
+    m_shaderOptions.forceSamplerTypeSpecConstants = m_d3d9Options.forceSamplerTypeSpecConstants;
+  }
+
+
+  HRESULT D3D9DeviceEx::CreateShaderModule(
+          D3D9CommonShader*       pShaderModule,
+          size_t*                 pBytecodeLength,
+          VkShaderStageFlagBits   ShaderStage,
+    const DWORD*                  pShaderBytecode) {
+
+    if (!pShaderBytecode)
+      return D3DERR_INVALIDCALL;
+
+    DxsoReader reader(
+      reinterpret_cast<const char*>(pShaderBytecode));
+
+    DxsoModule module(reader);
+    DxsoAnalysisInfo info = module.analyze();
+
+    const uint32_t majorVersion = module.info().majorVersion();
+    const uint32_t minorVersion = module.info().minorVersion();
+    VkShaderStageFlagBits bytecodeShaderStage = module.info().shaderStage();
+    size_t bytecodeLength = info.bytecodeByteLength;
+
+
+    // Pre-conversion checks
+    if (unlikely(ShaderStage != bytecodeShaderStage)) {
+      Logger::err("CreateShaderModule: Bytecode does not match shader stage");
       return D3DERR_INVALIDCALL;
     }
+
+    // Vertex shader version checks
+    if (ShaderStage == VK_SHADER_STAGE_VERTEX_BIT) {
+      // Late fixed-function capable hardware exposed support for VS 1.1
+      const uint32_t shaderModelVS = IsD3D8Compatible() ? 1u : std::max(1u, m_d3d9Options.shaderModel);
+
+      if (unlikely(majorVersion > shaderModelVS
+               || (majorVersion == 1 && minorVersion > 1)
+               // Skip checking the SM2 minor version, as it has a 2_x mode apparently
+               || (majorVersion == 3 && minorVersion != 0))) {
+        Logger::err(str::format("CreateShaderModule: Unsupported VS version ", majorVersion, ".", minorVersion));
+        return D3DERR_INVALIDCALL;
+      }
+    // Pixel shader version checks
+    } else if (ShaderStage == VK_SHADER_STAGE_FRAGMENT_BIT) {
+      const uint32_t shaderModelPS = IsD3D8Compatible() ? std::min(1u, m_d3d9Options.shaderModel) : m_d3d9Options.shaderModel;
+
+      if (unlikely(majorVersion > shaderModelPS
+               || (majorVersion == 1 && minorVersion > 4)
+               // Skip checking the SM2 minor version, as it has a 2_x mode apparently
+               || (majorVersion == 3 && minorVersion != 0))) {
+        Logger::err(str::format("CreateShaderModule: Unsupported PS version ", majorVersion, ".", minorVersion));
+        return D3DERR_INVALIDCALL;
+      }
+    } else {
+      Logger::err("CreateShaderModule: Unsupported shader stage");
+      return D3DERR_INVALIDCALL;
+    }
+
+
+    // Initialize the actual shader
+    D3D9CommonShader commonShader = { };
+
+    Sha1Hash hash = Sha1Hash::compute(pShaderBytecode, bytecodeLength);
+    DxvkShaderHash key(ShaderStage, bytecodeLength, hash.digest(), hash.digestLength());
+
+    D3D9ShaderCreateInfo moduleInfo;
+    moduleInfo.irCreateInfo         = {};
+    moduleInfo.irCreateInfo.options = m_dxvkShaderOptions;
+    moduleInfo.shaderOptions        = m_shaderOptions;
+    moduleInfo.analysisInfo = info;
+
+    HRESULT hr = m_shaderModules->GetShaderModule(this,
+      key, moduleInfo, pShaderBytecode, &commonShader);
+
+    if (FAILED(hr))
+      return hr;
+
+
+    // Post-conversion checks
+    const int32_t maxFloatConstantIndex = commonShader.GetMaxDefinedFloatConstant();
+    const int32_t maxIntConstantIndex = commonShader.GetMaxDefinedIntConstant();
+    const int32_t maxBoolConstantIndex = commonShader.GetMaxDefinedBoolConstant();
+
+    // Vertex shader specific validations. These validations are not
+    // performed on SWVP devices or on MIXED devices, even if
+    // SetSoftwareVertexProcessing(FALSE) is used to disable SWVP mode.
+    if (!CanSWVP() && key.stage() == VK_SHADER_STAGE_VERTEX_BIT) {
+
+      // Validate the float constant value advertised in pCaps->MaxFloatConstantsVS for HWVP.
+      if (unlikely(maxFloatConstantIndex > static_cast<int32_t>(caps::MaxFloatConstantsVS - 1))) {
+        Logger::err(str::format("CreateShaderModule: Invalid VS float constant index ", maxFloatConstantIndex));
+        return D3DERR_INVALIDCALL;
+      }
+
+      // Validate the integer constant value advertised in pCaps->MaxOtherConstants for HWVP.
+      if (unlikely(maxIntConstantIndex > static_cast<int32_t>(caps::MaxOtherConstants - 1))) {
+        Logger::err(str::format("CreateShaderModule: Invalid VS int constant index ", maxIntConstantIndex));
+        return D3DERR_INVALIDCALL;
+      }
+
+      // Validate the bool constant value advertised in pCaps->MaxOtherConstants for HWVP.
+      if (unlikely(maxBoolConstantIndex > static_cast<int32_t>(caps::MaxOtherConstants - 1))) {
+        Logger::err(str::format("CreateShaderModule: Invalid VS bool constant index ", maxBoolConstantIndex));
+        return D3DERR_INVALIDCALL;
+      }
+
+    // Pixel shader specific validations.
+    } else if (key.stage() == VK_SHADER_STAGE_FRAGMENT_BIT) {
+
+      uint32_t majorVersion = commonShader.GetInfo().majorVersion();
+      uint32_t minorVersion = commonShader.GetInfo().minorVersion();
+
+      const bool isSM2XOrNewer = majorVersion == 3 || (majorVersion == 2 && minorVersion != 0);
+      // Pixel shader model version 2_x has the same limits here as version 2_0
+      const uint32_t maxFloatConstantsPS = majorVersion == 3 ? caps::MaxSM3FloatConstantsPS :
+                                           majorVersion == 2 ? caps::MaxSM2FloatConstantsPS :
+                                           caps::MaxSM1FloatConstantsPS;
+
+      // Validate the float constant value coresponding to the supported shader model version.
+      if (unlikely(!CanSWVP() && maxFloatConstantIndex > static_cast<int32_t>(maxFloatConstantsPS - 1))) {
+        Logger::err(str::format("CreateShaderModule: Invalid PS float constant index ", maxFloatConstantIndex));
+        return D3DERR_INVALIDCALL;
+      }
+
+      // Pixel shaders below version 2_x can not use integer constants, not even in SWVP/MIXED mode
+      if (unlikely(!isSM2XOrNewer && maxIntConstantIndex != -1)) {
+        Logger::err(str::format("CreateShaderModule: Invalid use of PS int constant: ", maxIntConstantIndex));
+        return D3DERR_INVALIDCALL;
+      }
+
+      // Validate the integer constant value advertised in pCaps->MaxOtherConstants for HWVP.
+      if (unlikely(isSM2XOrNewer && !CanSWVP() &&
+                        maxIntConstantIndex > static_cast<int32_t>(caps::MaxOtherConstants - 1))) {
+        Logger::err(str::format("CreateShaderModule: Invalid PS int constant index ", maxIntConstantIndex));
+        return D3DERR_INVALIDCALL;
+      }
+
+      // Pixel shaders below version 2_x can not use bool constants, not even in SWVP/MIXED mode
+      if (unlikely(!isSM2XOrNewer && maxBoolConstantIndex != -1)) {
+        Logger::err("CreateShaderModule: Invalid use of PS bool constant");
+        return D3DERR_INVALIDCALL;
+      }
+
+      // Validate the bool constant value advertised in pCaps->MaxOtherConstants for HWVP.
+      if (unlikely(isSM2XOrNewer && !CanSWVP() &&
+                        maxBoolConstantIndex > static_cast<int32_t>(caps::MaxOtherConstants - 1))) {
+        Logger::err(str::format("CreateShaderModule: Invalid PS bool constant index ", maxBoolConstantIndex));
+        return D3DERR_INVALIDCALL;
+      }
+    }
+
+
+    *pShaderModule   = std::move(commonShader);
+    *pBytecodeLength = bytecodeLength;
+    return D3D_OK;
   }
 
 
@@ -8783,7 +8932,7 @@ namespace dxvk {
     rs[D3DRS_CLIPPLANEENABLE] = 0;
     m_dirty.set(D3D9DeviceDirtyFlag::ClipPlanes);
 
-    const auto& limits = m_dxvkDevice->adapter()->deviceProperties().core.properties.limits;
+    const auto& limits = m_dxvkDevice->properties().core.properties.limits;
 
     rs[D3DRS_POINTSPRITEENABLE]          = FALSE;
     rs[D3DRS_POINTSCALEENABLE]           = FALSE;

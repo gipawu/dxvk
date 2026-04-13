@@ -11,7 +11,7 @@ namespace dxvk {
     const Rc<DxvkInstance>&         instance,
     const Rc<DxvkAdapter>&          adapter,
     const Rc<vk::DeviceFn>&         vkd,
-    const DxvkDeviceFeatures&       features,
+    const DxvkDeviceCapabilities&   caps,
     const DxvkDeviceQueueSet&       queues,
     const DxvkQueueCallback&        queueCallback)
   : m_options           (instance->options()),
@@ -20,8 +20,8 @@ namespace dxvk {
     m_vkd               (vkd),
     m_debugFlags        (instance->debugFlags()),
     m_queues            (queues),
-    m_features          (features),
-    m_properties        (adapter->deviceProperties()),
+    m_features          (caps.getFeatures()),
+    m_properties        (caps.getProperties()),
     m_perfHints         (getPerfHints()),
     m_objects           (this),
     m_submissionQueue   (this, queueCallback) {
@@ -745,7 +745,7 @@ namespace dxvk {
     // (GFX10+) for now, where it is proven to work.
     hints.preferComputeMipGen = (m_adapter->matchesDriver(VK_DRIVER_ID_NVIDIA_PROPRIETARY_KHR)
                              || (m_adapter->matchesDriver(VK_DRIVER_ID_MESA_RADV)
-                              && m_adapter->deviceProperties().vk13.minSubgroupSize == 32u));
+                              && m_properties.vk13.minSubgroupSize == 32u));
 
     // On AMD we can expect it to be optimal to simply pass the heap offset
     // to descriptor memory through as-is to avoid some ALU. Some other
