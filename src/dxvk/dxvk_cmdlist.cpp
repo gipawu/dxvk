@@ -571,10 +571,14 @@ namespace dxvk {
 
       sets.push_back(set);
 
-      this->cmdBindDescriptorSets(cmdBuffer,
-        layout->getBindPoint(),
-        layout->getPipelineLayout(),
-        0u, sets.size(), sets.data());
+      VkBindDescriptorSetsInfo bindInfo = { VK_STRUCTURE_TYPE_BIND_DESCRIPTOR_SETS_INFO };
+      bindInfo.stageFlags = layout->getShaderStageMask();
+      bindInfo.layout = layout->getPipelineLayout();
+      bindInfo.firstSet = 0u;
+      bindInfo.descriptorSetCount = sets.size();
+      bindInfo.pDescriptorSets = sets.data();
+
+      this->cmdBindDescriptorSets(cmdBuffer, &bindInfo);
     }
 
     // Update push constants
@@ -585,12 +589,14 @@ namespace dxvk {
       std::memcpy(dataCopy.data(), pushData,
         std::min(dataCopy.size(), pushDataSize));
 
-      this->cmdPushConstants(cmdBuffer,
-        layout->getPipelineLayout(),
-        pushDataBlock.getStageMask(),
-        pushDataBlock.getOffset(),
-        pushDataBlock.getSize(),
-        dataCopy.data());
+      VkPushConstantsInfo pushInfo = { VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO };
+      pushInfo.layout = layout->getPipelineLayout();
+      pushInfo.stageFlags = pushDataBlock.getStageMask();
+      pushInfo.offset = pushDataBlock.getOffset();
+      pushInfo.size = pushDataBlock.getSize();
+      pushInfo.pValues = dataCopy.data();
+
+      this->cmdPushConstants(cmdBuffer, &pushInfo);
     }
   }
 
@@ -800,12 +806,15 @@ namespace dxvk {
       bufferOffsets[setCount] = storage.offset;
       setCount++;
 
-      cmdSetDescriptorBufferOffsetsEXT(cmdBuffer,
-        layout->getBindPoint(),
-        layout->getPipelineLayout(),
-        0u, setCount,
-        bufferIndices.data(),
-        bufferOffsets.data());
+      VkSetDescriptorBufferOffsetsInfoEXT bindInfo = { VK_STRUCTURE_TYPE_SET_DESCRIPTOR_BUFFER_OFFSETS_INFO_EXT };
+      bindInfo.stageFlags = layout->getShaderStageMask();
+      bindInfo.layout = layout->getPipelineLayout();
+      bindInfo.firstSet = 0u;
+      bindInfo.setCount = setCount;
+      bindInfo.pBufferIndices = bufferIndices.data();
+      bindInfo.pOffsets = bufferOffsets.data();
+
+      cmdSetDescriptorBufferOffsetsEXT(cmdBuffer, &bindInfo);
     }
 
     // Update push constants
@@ -816,12 +825,14 @@ namespace dxvk {
       std::memcpy(dataCopy.data(), pushData,
         std::min(dataCopy.size(), pushDataSize));
 
-      this->cmdPushConstants(cmdBuffer,
-        layout->getPipelineLayout(),
-        pushDataBlock.getStageMask(),
-        pushDataBlock.getOffset(),
-        pushDataBlock.getSize(),
-        dataCopy.data());
+      VkPushConstantsInfo pushInfo = { VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO };
+      pushInfo.layout = layout->getPipelineLayout();
+      pushInfo.stageFlags = pushDataBlock.getStageMask();
+      pushInfo.offset = pushDataBlock.getOffset();
+      pushInfo.size = pushDataBlock.getSize();
+      pushInfo.pValues = dataCopy.data();
+
+      this->cmdPushConstants(cmdBuffer, &pushInfo);
     }
   }
 

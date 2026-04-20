@@ -581,9 +581,6 @@ namespace dxvk {
       m_featuresSupported.khrPresentId2.presentId2 = VK_FALSE;
 
     // Sanitize features with other feature dependencies
-    if (!m_featuresSupported.core.features.shaderInt16)
-      m_featuresSupported.vk11.storagePushConstant16 = VK_FALSE;
-
     if (!m_featuresSupported.khrPresentId2.presentId2)
       m_featuresSupported.khrPresentWait2.presentWait2 = VK_FALSE;
 
@@ -795,11 +792,12 @@ namespace dxvk {
       ENABLE_FEATURE(core.features, drawIndirectFirstInstance, false),
       ENABLE_FEATURE(core.features, dualSrcBlend, true),
       ENABLE_FEATURE(core.features, fillModeNonSolid, true),
-      ENABLE_FEATURE(core.features, fragmentStoresAndAtomics, false),
+      ENABLE_FEATURE(core.features, fragmentStoresAndAtomics, true),
       ENABLE_FEATURE(core.features, fullDrawIndexUint32, true),
       ENABLE_FEATURE(core.features, geometryShader, true),
       ENABLE_FEATURE(core.features, imageCubeArray, true),
       ENABLE_FEATURE(core.features, independentBlend, true),
+      ENABLE_FEATURE(core.features, largePoints, false),
       ENABLE_FEATURE(core.features, logicOp, false),
       ENABLE_FEATURE(core.features, multiDrawIndirect, true),
       ENABLE_FEATURE(core.features, multiViewport, true),
@@ -807,12 +805,12 @@ namespace dxvk {
       ENABLE_FEATURE(core.features, pipelineStatisticsQuery, false),
       ENABLE_FEATURE(core.features, robustBufferAccess, true),
       ENABLE_FEATURE(core.features, sampleRateShading, true),
-      ENABLE_FEATURE(core.features, samplerAnisotropy, false),
+      ENABLE_FEATURE(core.features, samplerAnisotropy, true),
       ENABLE_FEATURE(core.features, shaderClipDistance, true),
       ENABLE_FEATURE(core.features, shaderCullDistance, true),
       ENABLE_FEATURE(core.features, shaderFloat64, false),
       ENABLE_FEATURE(core.features, shaderImageGatherExtended, true),
-      ENABLE_FEATURE(core.features, shaderInt16, false),
+      ENABLE_FEATURE(core.features, shaderInt16, true),
       ENABLE_FEATURE(core.features, shaderInt64, true),
       ENABLE_FEATURE(core.features, shaderUniformBufferArrayDynamicIndexing, false),
       ENABLE_FEATURE(core.features, shaderSampledImageArrayDynamicIndexing, true),
@@ -858,7 +856,7 @@ namespace dxvk {
       ENABLE_FEATURE(vk12, samplerMirrorClampToEdge, true),
       ENABLE_FEATURE(vk12, scalarBlockLayout, true),
       ENABLE_FEATURE(vk12, shaderFloat16, false),
-      ENABLE_FEATURE(vk12, shaderInt8, false),
+      ENABLE_FEATURE(vk12, shaderInt8, true),
       ENABLE_FEATURE(vk12, shaderOutputViewportIndex, false),
       ENABLE_FEATURE(vk12, shaderOutputLayer, false),
       ENABLE_FEATURE(vk12, timelineSemaphore, true),

@@ -1483,7 +1483,8 @@ namespace dxvk {
       dstViewInfo.packedSwizzle = DxvkImageViewKey::packSwizzle(dstTextureInfo->GetMapping().Swizzle);
 
       DxvkImageViewKey srcViewInfo;
-      srcViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+      srcViewInfo.viewType = blitInfo.srcSubresource.layerCount > 1u
+        ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
       srcViewInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
       srcViewInfo.format = srcImage->info().format;
       srcViewInfo.aspects = blitInfo.srcSubresource.aspectMask;
@@ -4782,7 +4783,7 @@ namespace dxvk {
 
 
   bool D3D9DeviceEx::SupportsSWVP() {
-    return m_dxvkDevice->features().core.features.vertexPipelineStoresAndAtomics && m_dxvkDevice->features().vk12.shaderInt8;
+    return m_dxvkDevice->features().core.features.vertexPipelineStoresAndAtomics;
   }
 
 
